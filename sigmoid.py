@@ -16,9 +16,9 @@ class neuron:
         self.error = 0.0
 
         if model != "none":
-            # Attempt to load existing neuron weights and bias from npz
+            # Defunct
             self.load(model)
-        else:
+        elif np.all(self.weights == 0) and self.bias == 0.0:
             # Randomize weights and bias
             self.initialize()
 
@@ -81,15 +81,24 @@ class neuron:
 # Handles perceptrons found in a layer of a model
 # nodes[] = A list containing all neuron objects present in the layer
 # size = the number of neurons contained in nodes[]
+# node_params = a list of tuples containing neuron information: weights[], float(bias)
 class layer:
-    def __init__(self, node_density: int, input_size : int = 2):
+    def __init__(self, node_density: int, input_size : int = 2, node_params: list[tuple] = None):
+        # NOTE: Could take a node list for the layer and pass it to neuron for initialization
+        # If the node list section is None, randomize nodes instead
         self.nodes = []
         self.size = node_density
         self.weights_per_node = input_size
 
+
         # Initialize the node list with randomly generated neurons
         for i in range(node_density):
-            n = neuron(weights = np.zeros(input_size), bias = 0.0)
+            if node_params is not None:
+                # Initialize from provided tuple list
+                n = neuron(weights = node_params[i][0], bias = float(node_params[i][1]))
+            else:
+                # Initialize with no params (randomized by neuron init)
+                n = neuron(weights = np.zeros(input_size), bias = 0.0)
             self.nodes.append(n)
     
     def describe(self, index = -1):
@@ -122,27 +131,46 @@ class model:
 
     # NOTE: (FIXED) New issue, adding a layer after initialization will not adjust the weights_per_node of the output layer.
 
-    # Will initialize a model with a number of hidden layers and a 1 node output layer based on params
-    def __init__(self, input_size, output_size, hidden_layers = 1, nodes_in_hidden = 2):
-        self.layers = []
-        self.input_size = input_size
-        self.hidden_layers = hidden_layers
-        self.nodes_per_hidden = nodes_in_hidden if nodes_in_hidden > 0 else 1
-        self.output_size = output_size
+    # NOTE: (FIXED) Loading a model from npz does not correctly set the model parameters.
+    # Build is being called to set up the model architecture which is overwirting node values.
 
+    # Will initialize a model with
+    # model = an npz file with weights and biases to load
+    def __init__(self, model_npz=None, input_size=2, output_size=1, hidden_layers=1, nodes_in_hidden=2):
+        if model_npz is not None:
+            self.load(model_npz)
+            print("Model loaded from NPZ.")
+        else:
+            print("Model was None.")       
+            self.layers = []
+            self.input_size = input_size
+            self.hidden_layers = hidden_layers
+            self.nodes_per_hidden = nodes_in_hidden if nodes_in_hidden > 0 else 1
+            self.output_size = output_size
+            self.build()
+
+    # Builds the model architecture from instantiated parameters
+    # Fully internal but can be called to replicate the model and append it to itself
+    # node_params = A list of tuples each containing weights[] and float(bias) for a neuron in a layer
+    # layer_sizes = A list of ints that specify nodes per layer if used correctly FIXME
+    def build(self, node_params: list[tuple] = None, layer_sizes: list[int] = None):
         # Create hidden layers
         # Layer 1
-        hidden_layer = layer(self.nodes_per_hidden, self.input_size)
+        # cumulative_index keeps track of where we should start the range in node_params
+        cumulative_index = 0
+        hidden_layer = layer(self.nodes_per_hidden, self.input_size, node_params[0: layer_sizes[0]] if node_params is not None else None)
         self.layers.append(hidden_layer)
-        # Next layers must meet certain parameters if present.
-        # ie as many weights as there are nodes in previous layer
+        cumulative_index += self.layers[0].size
+        # Next layers must meet certain conditions if present.
+        # as many weights as there are nodes in previous layer
         for i in range(self.hidden_layers - 1):
-            hidden_layer = layer(self.nodes_per_hidden, self.layers[i].size)
+            hidden_layer = layer(self.nodes_per_hidden, self.layers[i].size, node_params[cumulative_index: cumulative_index + layer_sizes[i]] if node_params is not None else None)
             self.layers.append(hidden_layer)
+            cumulative_index += self.layers[i+1].size
 
         # Create output layer
-        # NOTE: a layers nodes must have as many weights as there are nodes in the previous layer
-        output_layer = layer(1, self.nodes_per_hidden)
+        # NOTE: same rule for weights and previous nodes still applies
+        output_layer = layer(self.output_size, self.nodes_per_hidden, node_params[cumulative_index: cumulative_index + layer_sizes[-1]] if node_params is not None else None)
         self.layers.append(output_layer)
 
     # Generates and returns a layer with randomly generated nodes
@@ -154,6 +182,7 @@ class model:
 
     # Add a layer to model layers before the output layer
     # l - must be an existing layer object
+    # TODO: merge with generate_layer
     def add_layer(self, l: layer):
             # Insert before output layer
             self.layers.insert((len(self.layers) - 1), l)
@@ -163,6 +192,58 @@ class model:
             self.layers.pop()
             output_layer = layer(1, self.layers[-1].size)
             self.layers.append(output_layer)
+
+    # Accumulates necessary data to instantiate and saves it to an npz
+    def save(self, model_name_npz):
+        data = {}
+        # Base model parameters
+        data[f"input_size"] = self.input_size
+        data[f"output_size"] = self.output_size
+        data[f"hidden_layers"] = self.hidden_layers
+        data[f"nodes_per_hidden"] = self.nodes_per_hidden
+
+        # Layers and node information
+        for i, layer in enumerate(self.layers):
+            # Save each layer's size
+            data[f"L{i}_size"] = layer.size
+            for j, node in enumerate(layer.nodes):
+                data[f"L{i}_N{j}_weights"] = node.weights
+                data[f"L{i}_N{j}_bias"] = node.bias
+        np.savez(model_name_npz, **data)
+        print(f"Model saved as {model_name_npz}!")
+
+    # Loads a model from an npz
+    # NOTE: This is currently just a copy of half of the constructor      
+    def load(self, model_name_npz):
+        # Cycle through model data
+        data = np.load(model_name_npz)
+        self.input_size = int(data["input_size"])
+        self.output_size = int(data["output_size"])
+        self.hidden_layers = int(data["hidden_layers"])
+        self.nodes_per_hidden = int(data["nodes_per_hidden"])
+        self.layers = []
+
+        node_params = []
+        layer_sizes = []
+        # Hidden layers
+        for i in range(self.hidden_layers):
+            layer_sizes.append(int(data[f"L{i}_size"]))
+            for j in range(self.nodes_per_hidden):
+                # Load each node's weights and bias
+                weights = data[f"L{i}_N{j}_weights"]
+                bias = data[f"L{i}_N{j}_bias"]
+                node_params.append((weights, bias))
+        
+        # Output layer
+        layer_sizes.append(int(data[f"L{self.hidden_layers}_size"]))
+        for j in range(self.output_size):
+            weights = data[f"L{self.hidden_layers}_N{j}_weights"]
+            bias = data[f"L{self.hidden_layers}_N{j}_bias"]
+            node_params.append((weights, bias))
+
+        self.build(node_params, layer_sizes)
+
+        print(f"Model {model_name_npz} loaded!")
 
     def describe_verbose(self):
         print(f"Number of layers: {len(self.layers)}")
@@ -177,13 +258,20 @@ class model:
             print(layer.describe())
 
 def main():
-    # two inputs, one output, one hidden layer with two nodes
-    m = model(2, 1, 1, 2)
-    #m.describe()
-
+    # NOTE: Instantiating from scratch
+    m = model(None, 2, 1, 1, 2)
     m.add_layer(m.generate_layer(2, m.layers[len(m.layers)-2].size))
     m.describe_verbose()
 
+    # NOTE: Svaing and loading a model
+    m.save("test.npz")
+    m.describe_verbose()
+    m.load("test.npz")
+    m.describe_verbose()
+
+    # NOTE: Instantiating straight from npz
+    m2 = model("test.npz")
+    m2.describe_verbose()
 
 if __name__ == "__main__":
     main()

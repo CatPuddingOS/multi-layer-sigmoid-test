@@ -16,3 +16,8 @@ Many of the functionalities of the neuron class are carried over from previous w
     - Activation and fitting for sigmoid neurons are present
     - Save and load functionalities are present
     - Random initialization of weights and bias for a neuron are handled by this class
+
+Weights, bias, and network structure can be saved and loaded back
+    model.save() copies all data needed to instantiate a model object to an npz in the directory
+    model.load() uses this data to build a new model identical to the one saved to the load file
+    model.build() is code needed to both instantiate a random model class and load from a file
